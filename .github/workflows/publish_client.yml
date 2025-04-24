@@ -1,0 +1,46 @@
+name: Publish Hugsim Client
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-py:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11']
+        os-version: [ubuntu-latest]
+
+    runs-on: ${{ matrix.os-version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Try building
+        working-directory: ./client
+        run: |
+          pip install build twine
+          python -m build .
+      - name: Uploading packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: pygwalker
+          path: ./client/dist/*
+      - name: Uploading PyPI
+        uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          # PyPI user
+          # Password for your PyPI user or an access token
+          password: ${{ secrets.PYPI_TOKEN }}
+          # The target directory for distribution
+          packages-dir: ./client/dist
+          # Check metadata before uploading
+          verify-metadata: true
+          # Do not fail if a Python package distribution exists in the target package index
+          skip-existing: true
+          # Show verbose output.
+          verbose: true
+          # Show hash values of files to be uploaded
+          print-hash: true

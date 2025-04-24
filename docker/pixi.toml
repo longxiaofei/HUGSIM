@@ -11,9 +11,6 @@ version = "0.1.0"
 python = "==3.11.10"
 setuptools = "==78.1.0"
 
-[pypi-options]
-no-build-isolation = ["gsplat", "pytorch3d", "tinycudann", "simple-knn"]
-
 [pypi-dependencies]
 torch = { version = "==2.4.1", index = "https://download.pytorch.org/whl/cu118" }
 torchvision = { version = "==0.19.1", index = "https://download.pytorch.org/whl/cu118"}
@@ -54,18 +51,8 @@ piexif = ">=1.1.3, <2"
 jupyter = ">=1.1.1, <2"
 ipdb = ">=0.13.13, <0.14"
 numpy = ">=1.24.3, <2"
-
-# install from source code
-hugsim-env = { path = "./sim", editable = true }
-simple-knn = { path = "./submodules/simple-knn", editable = false }
-gsplat = { git = "https://github.com/hyzhou404/HUGSIM_splat.git", rev = "main" }
-flow-vis-torch = { git = "https://github.com/ChristophReich1996/Optical-Flow-Visualization-PyTorch", rev = "main" }
-unidepth = { git = "https://github.com/hyzhou404/UniDepth.git", rev = "main" }
-trajdata = { git = "https://github.com/hyzhou404/trajdata.git", rev = "main" }
-tinycudann = { git = "https://github.com/NVlabs/tiny-cuda-nn", rev = "master", subdirectory="bindings/torch" }
-kitti360Scripts = { git = "https://github.com/autonomousvision/kitti360Scripts.git", rev = "master" }
-simple-waymo-open-dataset-reader = { git = "https://github.com/gdlg/simple-waymo-open-dataset-reader.git", rev = "master" }
-pytorch3d = { git = "https://github.com/facebookresearch/pytorch3d.git", rev = "stable" }
-nuscenes-devkit = { git = "https://github.com/hyzhou404/nuscenes-devkit.git", rev = "master"}
+fastapi = "==0.115.12"
+uvicorn = "==0.34.2"
+huggingface-hub = "==0.31.1"
+hf_transfer = "==0.1.9"
 moviepy = ">=2.2.1, <3"
-

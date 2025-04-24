@@ -1,0 +1,25 @@
+[project]
+name = "hugsim_client"
+dynamic = ["version"]
+description = "A client package for interacting with the HugSim API."
+authors = [{ name = "XDimLab" }]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.7"
+
+dependencies = [
+    "requests",
+    "tenacity",
+    "numpy"
+]
+
+[project.urls]
+homepage = "https://github.com/longxiaofei/HUGSIM/tree/hf-competitions/client"
+repository = "https://github.com/longxiaofei/HUGSIM/tree/hf-competitions/client"
+
+[tool.hatch.version]
+path = "hugsim_client/__init__.py"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
