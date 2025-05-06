@@ -12,6 +12,10 @@ dependencies = [
     "tenacity"
 ]
 
+[project.urls]
+homepage = "https://github.com/longxiaofei/HUGSIM/tree/hf-competitions/client"
+repository = "https://github.com/longxiaofei/HUGSIM/tree/hf-competitions/client"
+
 [tool.hatch.version]
 path = "hugsim_client/__init__.py"
 
