@@ -3,14 +3,13 @@ import os
 import pickle
 import json
 import threading
-from collections import deque
+from collections import deque, OrderedDict
 from datetime import datetime
 from typing import Any
 sys.path.append(os.getcwd())
 
 from fastapi import FastAPI, Body, Header, HTTPException
 from fastapi.responses import HTMLResponse
-from argparse import ArgumentParser
 from omegaconf import OmegaConf
 import open3d as o3d
 import numpy as np
@@ -19,6 +18,25 @@ import uvicorn
 
 from sim.utils.sim_utils import traj2control, traj_transform_to_global
 from sim.utils.score_calculator import hugsim_evaluate
+
+
+class FifoDict:
+    def __init__(self, max_size: int):
+        self.max_size = max_size
+        self._order_dict = OrderedDict()
+        self.locker = threading.Lock()
+    
+    def push(self, key: str, value: Any):
+        with self.locker:
+            if key in self._order_dict:
+                self._order_dict.move_to_end(key)
+                return
+            if len(self._order_dict) >= self.max_size:
+                self._order_dict.popitem(last=False)
+            self._order_dict[key] = value
+    
+    def get(self, key: str) -> Any:
+        return self._order_dict.get(key, None)
 
 
 class EnvHandler:
@@ -126,6 +144,7 @@ class WebServer:
         self.env_handler = env_handler
         self.auth_token = auth_token
         self._init_app()
+        self._result_dict= FifoDict(max_size=30)
     
     def run(self):
         uvicorn.run(self._app, host="0.0.0.0", port=7860, workers=1)
@@ -138,23 +157,39 @@ class WebServer:
         state = self.env_handler.get_current_state()
         return {"success": True, "data": pickle.dumps(state["obs"], state["info"])}
 
-    # TODO: add idepotency
-    def _execute_action_endpoint(self, plan_traj: str = Body(..., embed=True)):
+    def _execute_action_endpoint(
+        self,
+        plan_traj: str = Body(..., embed=True),
+        transaction_id: str = Body(..., embed=True),
+    ):
+        cache_result = self._result_dict.get(transaction_id)
+        if cache_result is not None:
+            return {
+                "success": True,
+                "data": cache_result,
+            }
+
         if self.env_handler.has_done:
-            return {"success": True, "data": {"done": done, "state": None}}
+            result = {"done": done, "state": None}
+            self._result_dict.push(transaction_id, result)
+            return {"success": True, "data": result}
 
         plan_traj = pickle.loads(plan_traj)
         done = self.env_handler.execute_action(plan_traj)
         if done:
-            return {"success": True, "data": {"done": done, "state": None}}
+            result = {"done": done, "state": None}
+            self._result_dict.push(transaction_id, result)
+            return {"success": True, "data": result}
         
         state = self.env_handler.get_current_state()
+        result = {"done": done, "state": pickle.dumps(state["obs"], state["info"])}
+        self._result_dict.push(transaction_id, result)
         return {
             "success": True,
-            "data": {"done": done, "state": pickle.dumps(state["obs"], state["info"])}
+            "data": {"done": done, "state": result}
         }
 
-    def _main_page(self):
+    def _main_page_endpoint(self):
         html_content = f"""
             <html><body><pre>{"\n".join(self.env_handler.log_list)}</pre></body></html>
             <script>
@@ -171,34 +206,32 @@ class WebServer:
 
     def _init_app(self):
         self._app = FastAPI()
-        self._app.add_api_route("/reset", self.reset_env, methods=["POST"], dependencies=[self._verify_token])
-        self._app.add_api_route("/get_current_state", self.get_state, methods=["GET"], dependencies=[self._verify_token])
-        self._app.add_api_route("/execute_action", self.execute_action, methods=["POST"], dependencies=[self._verify_token])
-        self._app.add_api_route("/", self._main_page, methods=["GET"])
+        self._app.add_api_route("/reset", self._reset_endpoint, methods=["POST"], dependencies=[self._verify_token])
+        self._app.add_api_route("/get_current_state", self._get_current_state_endpoint, methods=["GET"], dependencies=[self._verify_token])
+        self._app.add_api_route("/execute_action", self._execute_action_endpoint, methods=["POST"], dependencies=[self._verify_token])
+        self._app.add_api_route("/", self._main_page_endpoint, methods=["GET"])
 
 
 if __name__ == "__main__":
-    # Set up command line argument parser
-    parser = ArgumentParser(description="Testing script parameters")
-    parser.add_argument("--scenario_path", type=str, required=True)
-    parser.add_argument("--base_path", type=str, required=True)
-    parser.add_argument("--camera_path", type=str, required=True)
-    parser.add_argument("--kinematic_path", type=str, required=True)
-    parser.add_argument('--ad', default="uniad")
-    parser.add_argument('--ad_cuda', default="1")
-    args = parser.parse_args()
+    # Using fixed paths for web server
+    ad = "uniad"
+    base_path = os.path.join(os.path.dirname(__file__), 'docker', "web_server_config", 'nuscenes_base.yaml')
+    # unknown config
+    scenario_path = os.path.join(os.path.dirname(__file__), 'docker', "web_server_config", 'nuscenes_scenario.yaml')
+    camera_path = os.path.join(os.path.dirname(__file__), 'docker', "web_server_config", 'nuscenes_camera.yaml')
+    kinematic_path = os.path.join(os.path.dirname(__file__), 'docker', "web_server_config", 'kinematic.yaml')
 
-    scenario_config = OmegaConf.load(args.scenario_path)
-    base_config = OmegaConf.load(args.base_path)
-    camera_config = OmegaConf.load(args.camera_path)
-    kinematic_config = OmegaConf.load(args.kinematic_path)
+    scenario_config = OmegaConf.load(scenario_path)
+    base_config = OmegaConf.load(base_path)
+    camera_config = OmegaConf.load(camera_path)
+    kinematic_config = OmegaConf.load(kinematic_path)
     cfg = OmegaConf.merge(
         {"scenario": scenario_config},
         {"base": base_config},
         {"camera": camera_config},
         {"kinematic": kinematic_config}
     )
-    cfg.base.output_dir = cfg.base.output_dir + args.ad
+    cfg.base.output_dir = cfg.base.output_dir + ad
 
     model_path = os.path.join(cfg.base.model_base, cfg.scenario.scene_name)
     model_config = OmegaConf.load(os.path.join(model_path, 'cfg.yaml'))
@@ -206,15 +239,6 @@ if __name__ == "__main__":
     
     output = os.path.join(cfg.base.output_dir, cfg.scenario.scene_name+"_"+cfg.scenario.mode)
     os.makedirs(output, exist_ok=True)
-
-    if args.ad == 'uniad':
-        ad_path = cfg.base.uniad_path
-    elif args.ad == 'vad':
-        ad_path = cfg.base.vad_path
-    elif args.ad == 'ltf':
-        ad_path = cfg.base.ltf_path
-    else:
-        raise NotImplementedError
     
     env_handler = EnvHandler(cfg, output)
     web_server = WebServer(env_handler, auth_token=os.getenv('HUGSIM_AUTH_TOKEN'))
