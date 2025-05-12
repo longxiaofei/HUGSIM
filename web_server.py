@@ -3,14 +3,18 @@ import os
 import pickle
 import json
 import threading
+import time
+import io
+import enum
 from collections import deque, OrderedDict
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timedelta
+from typing import Any, Dict
 sys.path.append(os.getcwd())
 
 from fastapi import FastAPI, Body, Header, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from omegaconf import OmegaConf
+from huggingface_hub import HfApi, hf_hub_download
 import open3d as o3d
 import numpy as np
 import gymnasium
@@ -18,6 +22,98 @@ import uvicorn
 
 from sim.utils.sim_utils import traj2control, traj_transform_to_global
 from sim.utils.score_calculator import hugsim_evaluate
+
+IN_HUGGINGFACE_SPACE = os.getenv('IN_HUGGINGFACE_SPACE', 'false') == 'true'
+STOP_SPACE_TIMEOUT = int(os.getenv('STOP_SPACE_TIMEOUT', '7200'))
+HF_TOKEN = os.getenv('HF_TOKEN', None)
+SPACE_PARAMS = json.loads(os.getenv('PARAMS', '{}'))
+
+
+class GlobalState:
+    done = False
+
+
+class SubmissionStatus(enum.Enum):
+    PENDING = 0
+    QUEUED = 1
+    PROCESSING = 2
+    SUCCESS = 3
+    FAILED = 4
+
+
+def download_submission_info() -> Dict[str. Any]:
+    """
+    Download the submission info from Hugging Face Hub.
+    Args:
+        team_id (str): The team ID.
+    Returns:
+        Dict[str, Any]: The submission info.
+    """
+    submission_info_path = hf_hub_download(
+        repo_id=SPACE_PARAMS["competition_id"],
+        filename=f"submission_info/{SPACE_PARAMS["team_id"]}.json",
+        repo_type="dataset",
+        token=HF_TOKEN
+    )
+    with open(submission_info_path, 'r') as f:
+        submission_info = json.load(f)
+    
+    return submission_info
+
+
+def upload_submission_info(user_submission_info: Dict[str, Any]):
+    user_submission_info_json = json.dumps(user_submission_info, indent=4)
+    user_submission_info_json_bytes = user_submission_info_json.encode("utf-8")
+    user_submission_info_json_buffer = io.BytesIO(user_submission_info_json_bytes)
+    api = HfApi(token=HF_TOKEN)
+    api.upload_file(
+        path_or_fileobj=user_submission_info_json_buffer,
+        path_in_repo=f"submission_info/{SPACE_PARAMS["team_id"]}.json",
+        repo_id=SPACE_PARAMS["competition_id"],
+        repo_type="dataset",
+    )
+
+
+def update_submission_status(status):
+    user_submission_info = download_submission_info()
+    for submission in user_submission_info["submissions"]:
+        if submission["submission_id"] == SPACE_PARAMS["submission_id"]:
+            submission["status"] = status
+            break
+    upload_submission_info(user_submission_info)
+
+
+def auto_stop():
+    """
+    Automatically stop the server after a certain timeout.
+    """
+    stop_deadline = datetime.now() + timedelta(seconds=STOP_SPACE_TIMEOUT)
+    while 1:
+        if datetime.now() > stop_deadline:
+            update_submission_status(SubmissionStatus.FAILED.value)
+            break
+        if GlobalState.done:
+            update_submission_status(SubmissionStatus.SUCCESS.value)
+            break
+        time.sleep(60)
+
+    server_space_id = SPACE_PARAMS["server_space_id"]
+    client_space_id = SPACE_PARAMS["client_space_id"]
+    api = HfApi(token=HF_TOKEN)
+    api.delete_repo(
+        repo_id=server_space_id,
+        repo_type="space"
+    )
+    api.delete_repo(
+        repo_id=client_space_id,
+        repo_type="space"
+    )
+
+if IN_HUGGINGFACE_SPACE:
+    # Start a thread to automatically stop the server after a timeout
+    auto_stop_thread = threading.Thread(target=auto_stop, daemon=True)
+    auto_stop_thread.start()
+    update_submission_status(SubmissionStatus.PROCESSING.value)
 
 
 class FifoDict:
@@ -85,7 +181,7 @@ class EnvHandler:
         """
         return self._log_list
 
-    def execute_action(self, plan_traj: Any) -> bool:
+    def execute_action(self, plan_traj: np.ndarray) -> bool:
         """
         Execute the action based on the planned trajectory.
         Args:
@@ -155,7 +251,14 @@ class WebServer:
 
     def _get_current_state_endpoint(self):
         state = self.env_handler.get_current_state()
-        return {"success": True, "data": pickle.dumps(state["obs"], state["info"])}
+        return Response(content=pickle.dumps(state), media_type="application/octet-stream")
+
+    def _load_numpy_ndarray_json_str(self, json_str: str) -> np.ndarray:
+        """
+        Load a numpy ndarray from a JSON string.
+        """
+        data = json.loads(json_str)
+        return np.array(data["data"], dtype=data["dtype"]).reshape(data["shape"])
 
     def _execute_action_endpoint(
         self,
@@ -164,30 +267,25 @@ class WebServer:
     ):
         cache_result = self._result_dict.get(transaction_id)
         if cache_result is not None:
-            return {
-                "success": True,
-                "data": cache_result,
-            }
+            return Response(content=cache_result, media_type="application/octet-stream")
 
         if self.env_handler.has_done:
-            result = {"done": done, "state": None}
+            result = pickle.dumps({"done": done, "state": None})
             self._result_dict.push(transaction_id, result)
-            return {"success": True, "data": result}
+            return Response(content=result, media_type="application/octet-stream")
 
-        plan_traj = pickle.loads(plan_traj)
+        plan_traj = self._load_numpy_ndarray_json_str(plan_traj)
         done = self.env_handler.execute_action(plan_traj)
+        GlobalState.done = done
         if done:
-            result = {"done": done, "state": None}
+            result = pickle.dumps({"done": done, "state": None})
             self._result_dict.push(transaction_id, result)
-            return {"success": True, "data": result}
+            return Response(content=result, media_type="application/octet-stream")
         
         state = self.env_handler.get_current_state()
-        result = {"done": done, "state": pickle.dumps(state["obs"], state["info"])}
+        result = pickle.dumps({"done": done, "state": state})
         self._result_dict.push(transaction_id, result)
-        return {
-            "success": True,
-            "data": {"done": done, "state": result}
-        }
+        return Response(content=result, media_type="application/octet-stream")
 
     def _main_page_endpoint(self):
         html_content = f"""
@@ -212,6 +310,7 @@ class WebServer:
         self._app.add_api_route("/", self._main_page_endpoint, methods=["GET"])
 
 
+# TODO: add code to update submission info
 if __name__ == "__main__":
     # Using fixed paths for web server
     ad = "uniad"

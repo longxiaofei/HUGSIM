@@ -2,8 +2,10 @@ from typing import Optional, Dict, Any
 import pickle
 import os
 import uuid
+import json
 
 from requests import Session
+import numpy as np
 import tenacity
 
 
@@ -13,7 +15,20 @@ class HugsimClient:
         self.api_token = api_token or os.getenv('HUGSIM_API_TOKEN', None)
         self._session = Session()
         self._header = {"auth-token": self.api_token}
-    
+
+    def _dump_numpy_ndarray_json_str(self, data: np.ndarray) -> str:
+        """
+        Convert numpy ndarray to JSON string
+        :param data: Numpy ndarray
+        :return: JSON string
+        """
+        info = {
+            "data": data.tolist(),
+            "shape": data.shape,
+            "dtype": str(data.dtype),
+        }
+        return json.dumps(info)
+
     def reset_env(self):
         """
         Reset the environment
@@ -32,14 +47,9 @@ class HugsimClient:
         response = self._session.get(url, headers=self._header)
         if response.status_code != 200:
             raise Exception(f"Failed to get current state: {response.text}")
-        resp_json = response.json()
-        state_data = pickle.loads(resp_json['data'])
-        return {
-            "obs": state_data[0],
-            "info": state_data[1]
-        }
+        return pickle.loads(response.content)
 
-    def execute_action(self, plan_traj: Any) -> Dict[str, Any]:
+    def execute_action(self, plan_traj: np.ndarray) -> Dict[str, Any]:
         """
         Execute an action in the environment
         :param plan_traj: The planned trajectory to execute
@@ -49,26 +59,18 @@ class HugsimClient:
         return self._execute_action(plan_traj, transaction_id)
 
     @tenacity.retry(stop=tenacity.stop_after_attempt(3), wait=tenacity.wait_fixed(5))
-    def _execute_action(self, plan_traj: Any, transaction_id: str) -> Dict[str, Any]:
+    def _execute_action(self, plan_traj: np.ndarray, transaction_id: str) -> Dict[str, Any]:
         """
         Execute an action in the environment
         :param plan_traj: The planned trajectory to execute
         :return: A dictionary containing the done status and the state
         """
         url = f"{self.host}/execute_action"
-        data = pickle.dumps(plan_traj)
-        response = self._session.post(url, headers=self._header, json={"plan_traj": data, "transaction_id": transaction_id})
+        response = self._session.post(
+            url,
+            headers=self._header,
+            json={"plan_traj": self._dump_numpy_ndarray_json_str(plan_traj), "transaction_id": transaction_id})
         if response.status_code != 200:
             raise Exception(f"Failed to execute action: {response.text}")
-        resp_json = response.json()
-        data = resp_json['data']
-        if data['done']:
-            return {"done": True, "state": None}
-        state_data = pickle.loads(data['state'])
-        return {
-            "done": False,
-            "state": {
-                "obs": state_data[0],
-                "info": state_data[1]
-            }
-        }
+        data = pickle.loads(response.content)
+        return data
