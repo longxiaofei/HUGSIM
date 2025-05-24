@@ -1,0 +1,31 @@
+FROM hyzhou404/hugsim_server:0.1
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC \
+    HF_HUB_ENABLE_HF_TRANSFER=1
+
+ENV PATH="${HOME}/miniconda3/bin:${PATH}"
+ARG PATH="${HOME}/miniconda3/bin:${PATH}"
+
+WORKDIR /app
+
+USER 1000
+
+ENV PATH /app/miniconda/bin:$PATH
+
+SHELL ["conda", "run","--no-capture-output", "-p","/app/env", "/bin/bash", "-c"]
+
+COPY --chown=1000:1000 ./web_server.py /app/web_server.py
+COPY --chown=1000:1000 ./docker/web_server_config/scene-0383-medium-00.yaml  /app/docker/web_server_config/scene-0383-medium-00.yaml
+COPY --chown=1000:1000 ./download_pre_datas.py /app/download_pre_datas.py
+
+ENV TCNN_CUDA_ARCHITECTURES 75
+
+ENV TORCH_CUDA_ARCH_LIST "7.5"
+
+ENV http_proxy=
+ENV https_proxy=
+
+RUN ./.pixi/envs/default/bin/python /app/download_pre_datas.py
+
+CMD ["./.pixi/envs/default/bin/python", "web_server.py"]
