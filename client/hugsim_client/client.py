@@ -1,4 +1,5 @@
 from typing import Optional, Dict, Any
+from dataclasses import dataclass
 import pickle
 import os
 import uuid
@@ -8,11 +9,21 @@ from requests import Session
 import numpy as np
 import tenacity
 
+@dataclass
+class State:
+    info: Dict[str, Any]
+    obs: Dict[str, Any]
+
+@dataclass
+class ExecuteActionResult:
+    done: bool
+    state: State
+
 
 class HugsimClient:
     def __init__(self, host: Optional[str]=None, api_token: Optional[str]=None):
         self.host = host or os.getenv('HUGSIM_SERVER_HOST', 'http://localhost:8065')
-        self.api_token = api_token or os.getenv('HUGSIM_API_TOKEN', None)
+        self.api_token = api_token or os.getenv('HUGSIM_API_TOKEN', "")
         self._session = Session()
         self._header = {"auth-token": self.api_token}
 
@@ -38,7 +49,7 @@ class HugsimClient:
         if response.status_code != 200:
             raise Exception(f"Failed to reset environment: {response.text}")
 
-    def get_current_state(self) -> Dict[str, Any]:
+    def get_current_state(self) -> State:
         """
         Get the current state of the environment
         :return: A dictionary containing the observation and info
@@ -47,16 +58,27 @@ class HugsimClient:
         response = self._session.get(url, headers=self._header)
         if response.status_code != 200:
             raise Exception(f"Failed to get current state: {response.text}")
-        return pickle.loads(response.content)
+        result = pickle.loads(response.content)
+        return State(
+            info=result['info'],
+            obs=result['obs']
+        )
 
-    def execute_action(self, plan_traj: np.ndarray) -> Dict[str, Any]:
+    def execute_action(self, plan_traj: np.ndarray) -> ExecuteActionResult:
         """
         Execute an action in the environment
         :param plan_traj: The planned trajectory to execute
         :return: A dictionary containing the done status and the state
         """
         transaction_id = uuid.uuid4().hex
-        return self._execute_action(plan_traj, transaction_id)
+        result = self._execute_action(plan_traj, transaction_id)
+        return ExecuteActionResult(
+            done=result['done'],
+            state=State(
+                info=result['state']['info'],
+                obs=result['state']['obs']
+            )
+        )
 
     @tenacity.retry(stop=tenacity.stop_after_attempt(3), wait=tenacity.wait_fixed(5))
     def _execute_action(self, plan_traj: np.ndarray, transaction_id: str) -> Dict[str, Any]:
