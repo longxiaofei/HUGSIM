@@ -6,12 +6,13 @@ import threading
 import time
 import io
 import enum
+import hugsim_env
 from collections import deque, OrderedDict
 from datetime import datetime, timedelta
 from typing import Any, Dict
 sys.path.append(os.getcwd())
 
-from fastapi import FastAPI, Body, Header, HTTPException
+from fastapi import FastAPI, Body, Header, HTTPException, Depends
 from fastapi.responses import HTMLResponse, Response
 from omegaconf import OmegaConf
 from huggingface_hub import HfApi, hf_hub_download
@@ -28,7 +29,6 @@ STOP_SPACE_TIMEOUT = int(os.getenv('STOP_SPACE_TIMEOUT', '7200'))
 HF_TOKEN = os.getenv('HF_TOKEN', None)
 SPACE_PARAMS = json.loads(os.getenv('PARAMS', '{}'))
 
-
 class GlobalState:
     done = False
 
@@ -41,7 +41,7 @@ class SubmissionStatus(enum.Enum):
     FAILED = 4
 
 
-def download_submission_info() -> Dict[str. Any]:
+def download_submission_info() -> Dict[str, Any]:
     """
     Download the submission info from Hugging Face Hub.
     Args:
@@ -51,7 +51,7 @@ def download_submission_info() -> Dict[str. Any]:
     """
     submission_info_path = hf_hub_download(
         repo_id=SPACE_PARAMS["competition_id"],
-        filename=f"submission_info/{SPACE_PARAMS["team_id"]}.json",
+        filename=f"submission_info/{SPACE_PARAMS['team_id']}.json",
         repo_type="dataset",
         token=HF_TOKEN
     )
@@ -68,7 +68,7 @@ def upload_submission_info(user_submission_info: Dict[str, Any]):
     api = HfApi(token=HF_TOKEN)
     api.upload_file(
         path_or_fileobj=user_submission_info_json_buffer,
-        path_in_repo=f"submission_info/{SPACE_PARAMS["team_id"]}.json",
+        path_in_repo=f"submission_info/{SPACE_PARAMS['team_id']}.json",
         repo_id=SPACE_PARAMS["competition_id"],
         repo_type="dataset",
     )
@@ -140,8 +140,8 @@ class EnvHandler:
         self.cfg = cfg
         self.output = output
         self.env = gymnasium.make('hugsim_env/HUGSim-v0', cfg=cfg, output=output)
-        self.reset_env()
         self._lock = threading.Lock()
+        self.reset_env()
 
     def reset_env(self):
         """
@@ -288,8 +288,9 @@ class WebServer:
         return Response(content=result, media_type="application/octet-stream")
 
     def _main_page_endpoint(self):
+        log_str = "\n".join(self.env_handler.log_list)
         html_content = f"""
-            <html><body><pre>{"\n".join(self.env_handler.log_list)}</pre></body></html>
+            <html><body><pre>{log_str}</pre></body></html>
             <script>
                 setTimeout(function() {{
                     window.location.reload();
@@ -304,9 +305,9 @@ class WebServer:
 
     def _init_app(self):
         self._app = FastAPI()
-        self._app.add_api_route("/reset", self._reset_endpoint, methods=["POST"], dependencies=[self._verify_token])
-        self._app.add_api_route("/get_current_state", self._get_current_state_endpoint, methods=["GET"], dependencies=[self._verify_token])
-        self._app.add_api_route("/execute_action", self._execute_action_endpoint, methods=["POST"], dependencies=[self._verify_token])
+        self._app.add_api_route("/reset", self._reset_endpoint, methods=["POST"], dependencies=[Depends(self._verify_token)])
+        self._app.add_api_route("/get_current_state", self._get_current_state_endpoint, methods=["GET"], dependencies=[Depends(self._verify_token)])
+        self._app.add_api_route("/execute_action", self._execute_action_endpoint, methods=["POST"], dependencies=[Depends(self._verify_token)])
         self._app.add_api_route("/", self._main_page_endpoint, methods=["GET"])
 
 
@@ -316,7 +317,7 @@ if __name__ == "__main__":
     ad = "uniad"
     base_path = os.path.join(os.path.dirname(__file__), 'docker', "web_server_config", 'nuscenes_base.yaml')
     # unknown config
-    scenario_path = os.path.join(os.path.dirname(__file__), 'docker', "web_server_config", 'nuscenes_scenario.yaml')
+    scenario_path = os.path.join(os.path.dirname(__file__), 'docker', "web_server_config", 'scene-0383-medium-00.yaml')
     camera_path = os.path.join(os.path.dirname(__file__), 'docker', "web_server_config", 'nuscenes_camera.yaml')
     kinematic_path = os.path.join(os.path.dirname(__file__), 'docker', "web_server_config", 'kinematic.yaml')
 
@@ -334,6 +335,7 @@ if __name__ == "__main__":
 
     model_path = os.path.join(cfg.base.model_base, cfg.scenario.scene_name)
     model_config = OmegaConf.load(os.path.join(model_path, 'cfg.yaml'))
+    model_config.update({"model_path": "/app/app_datas/PAMI2024/release/ss/scenes/nuscenes/scene-0383"})
     cfg.update(model_config)
     
     output = os.path.join(cfg.base.output_dir, cfg.scenario.scene_name+"_"+cfg.scenario.mode)
