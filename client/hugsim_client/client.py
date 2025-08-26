@@ -49,7 +49,7 @@ class HugsimClient:
         self._header = {"auth-token": self.api_token}
 
         if os.getenv('IN_HF_SPACE', "true") == "true":
-            _huggingface_space_action(self.host)
+            _huggingface_space_action()
 
     def _dump_numpy_ndarray_json_str(self, data: np.ndarray) -> str:
         """
