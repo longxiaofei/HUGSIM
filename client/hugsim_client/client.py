@@ -21,12 +21,35 @@ class EnvState:
     state: State
 
 
+def _huggingface_space_action():
+    """
+    Action to be executed in a Hugging Face Space environment.
+    """
+    # Due to the nature of Hugging Face Spaces, we need to ensure that the server is running
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from threading import Thread
+    class ServerHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b"running")
+    # Start a simple HTTP server to indicate that the Hugging Face Space is running
+    server_address = ('', 7860) 
+    httpd = HTTPServer(server_address, ServerHandler)
+    thread = Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+
+
 class HugsimClient:
     def __init__(self, host: Optional[str]=None, api_token: Optional[str]=None):
         self.host = host or os.getenv('HUGSIM_SERVER_HOST', 'http://localhost:8065')
         self.api_token = api_token or os.getenv('HUGSIM_API_TOKEN', "")
         self._session = Session()
         self._header = {"auth-token": self.api_token}
+
+        if os.getenv('IN_HF_SPACE', "true") == "true":
+            _huggingface_space_action(self.host)
 
     def _dump_numpy_ndarray_json_str(self, data: np.ndarray) -> str:
         """
